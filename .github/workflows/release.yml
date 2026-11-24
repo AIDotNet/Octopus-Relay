@@ -213,6 +213,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: binary-*
           merge-multiple: true
 
       - name: Generate SHA256SUMS
@@ -227,6 +228,7 @@ jobs:
             EXTRA+=(--prerelease)
           fi
           gh release create "${GITHUB_REF_NAME}" artifacts/* \
+            --repo "${GITHUB_REPOSITORY}" \
             --title "Octopus Relay ${GITHUB_REF_NAME}" \
             --generate-notes \
             "${EXTRA[@]}"
