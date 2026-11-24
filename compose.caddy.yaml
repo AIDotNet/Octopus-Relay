@@ -1,0 +1,36 @@
+# All-in-one Octopus Relay + automatic HTTPS via Caddy (Let's Encrypt).
+# Required in .env: RELAY_DOMAIN, RELAY_PASSWORD (and optionally RELAY_ACCESS_KEY).
+# Usage: docker compose -f compose.caddy.yaml up -d
+
+services:
+  relay:
+    image: ghcr.io/aidotnet/octopus-relay:latest
+    # build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      RELAY_DATA_DIR: /data
+      RELAY_LISTEN: http://0.0.0.0:8080
+      RELAY_PUBLIC_URL: https://${RELAY_DOMAIN:?set RELAY_DOMAIN in .env}
+      RELAY_TRUST_PROXY: "true"
+    volumes:
+      - octopus-relay-data:/data
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - relay
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    command: caddy reverse-proxy --from ${RELAY_DOMAIN:?set RELAY_DOMAIN in .env} --to relay:8080
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  octopus-relay-data:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,21 @@
+# Standalone Octopus Relay behind your existing reverse proxy (Nginx / 1Panel / Caddy / Cloudflare Tunnel / Tailscale).
+# Copy .env.example to .env and fill in RELAY_PASSWORD (and optionally RELAY_ACCESS_KEY) before starting.
+
+services:
+  relay:
+    image: ghcr.io/aidotnet/octopus-relay:latest
+    # Uncomment to build locally instead of pulling from GHCR:
+    # build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      RELAY_DATA_DIR: /data
+      RELAY_LISTEN: http://0.0.0.0:8080
+    volumes:
+      - octopus-relay-data:/data
+    ports:
+      # Bind loopback only; terminate TLS in your reverse proxy or tunnel.
+      - "127.0.0.1:${RELAY_PORT:-8080}:8080"
+
+volumes:
+  octopus-relay-data:

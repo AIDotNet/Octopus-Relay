@@ -1,0 +1,11 @@
+.git
+.github
+**/bin
+**/obj
+data
+dist
+tests
+design
+.env
+*.md
+compose*.yaml
