@@ -2,6 +2,7 @@
 # Single NativeAOT binary + minimal Alpine runtime (~26 MB total image).
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine AS build
+ARG VERSION=1.0.0
 RUN apk add --no-cache clang build-base zlib-dev
 WORKDIR /src
 COPY global.json Directory.Build.props Directory.Packages.props ./
@@ -11,6 +12,7 @@ RUN dotnet publish src/Octopus.Relay \
     -p:PublishAot=true \
     -p:StripSymbols=true \
     -p:DebugType=None \
+    -p:Version=${VERSION} \
     -o /app
 
 FROM mcr.microsoft.com/dotnet/runtime-deps:10.0-alpine

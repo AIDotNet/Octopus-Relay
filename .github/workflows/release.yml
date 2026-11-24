@@ -91,14 +91,83 @@ jobs:
           name: binary-${{ matrix.rid }}
           path: dist/*
 
-  docker:
-    name: build & push Docker image
+  docker-build:
+    name: build Docker image (${{ matrix.platform }})
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux/amd64
+            arch: amd64
+          - os: ubuntu-24.04-arm
+            platform: linux/arm64
+            arch: arm64
     steps:
       - uses: actions/checkout@v4
 
-      - uses: docker/setup-qemu-action@v3
+      - name: Resolve image & version
+        id: info
+        shell: bash
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then VERSION="1.0.0"; fi
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          provenance: false
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.info.outputs.version }}
+          outputs: type=image,name=${{ steps.info.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  docker-merge:
+    name: publish multi-arch Docker manifest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [docker-build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
 
       - uses: docker/setup-buildx-action@v3
 
@@ -118,19 +187,27 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        env:
+          TAGS_LIST: ${{ steps.meta.outputs.tags }}
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          TAGS=()
+          while IFS= read -r tag; do
+            [[ -n "$tag" ]] && TAGS+=("-t" "$tag")
+          done <<< "$TAGS_LIST"
+          SOURCES=()
+          for f in *; do
+            SOURCES+=("${IMAGE}@sha256:${f}")
+          done
+          docker buildx imagetools create "${TAGS[@]}" "${SOURCES[@]}"
+          docker buildx imagetools inspect "${IMAGE}:${GITHUB_REF_NAME#v}"
 
   publish-release:
     name: publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [binaries, docker]
+    needs: [binaries, docker-merge]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -145,6 +222,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          EXTRA=()
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            EXTRA+=(--prerelease)
+          fi
           gh release create "${GITHUB_REF_NAME}" artifacts/* \
             --title "Octopus Relay ${GITHUB_REF_NAME}" \
-            --generate-notes
+            --generate-notes \
+            "${EXTRA[@]}"
