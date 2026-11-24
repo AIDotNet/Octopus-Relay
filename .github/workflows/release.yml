@@ -51,6 +51,15 @@ jobs:
           if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then VERSION="1.0.0"; fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      - name: Ensure NativeAOT linker (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          if ! command -v clang >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y clang zlib1g-dev
+          fi
+
       - name: Publish NativeAOT
         shell: bash
         run: |
@@ -107,7 +116,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
