@@ -13,7 +13,11 @@ public interface IDeviceSignOut
 /// <summary>Manages authorized devices and single-use rotating refresh tokens (<c>or1.&lt;deviceId&gt;.&lt;random&gt;</c>).</summary>
 public sealed class DeviceSessions(JsonStateStore store, AccessTokens tokens, IDeviceSignOut signOut, TimeProvider time, int maxDevices)
 {
-    public static readonly TimeSpan RefreshLifetime = TimeSpan.FromDays(60);
+    /// <summary>
+    /// A refresh token not used for this long stops counting; every refresh moves it on. Devices signed in under the
+    /// earlier 60 days keep that expiry until their next refresh.
+    /// </summary>
+    public static readonly TimeSpan RefreshLifetime = TimeSpan.FromDays(30);
     public static readonly TimeSpan ReuseGrace = TimeSpan.FromMinutes(2);
 
     private const string Prefix = "or1.";

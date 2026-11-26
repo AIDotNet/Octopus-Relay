@@ -55,7 +55,43 @@ public sealed class CryptoAndStoreTests
         Assert.True(tokens.TryValidate(fresh, out _));
 
         clock.Advance(TimeSpan.FromMinutes(16));
+        Assert.True(tokens.TryValidate(fresh, out _));
+        clock.Advance(AccessTokens.Lifetime);
         Assert.False(tokens.TryValidate(fresh, out _));
+    }
+
+    [Fact]
+    public void An_access_token_of_a_device_that_is_gone_is_refused_after_a_restart_too()
+    {
+        var temp = Directory.CreateTempSubdirectory("octopus-relay-store-").FullName;
+        try
+        {
+            var clock = new FakeClock(new DateTimeOffset(2026, 11, 25, 0, 0, 0, TimeSpan.Zero));
+            var secret = JsonStateStore.LoadOrCreateSecret(temp);
+            using var dev = new TestDevice("MacBook");
+            Assert.True(DeviceKey.TryParse(dev.PublicKeyBase64, out var key));
+            using var store = new JsonStateStore(temp, clock, "Alice");
+            var sessions = new DeviceSessions(store, new AccessTokens(secret, clock), new RecordingSignOut([]), clock, maxDevices: 2);
+            var earlier = sessions.SignIn(key, dev.Name, dev.Kind, "macOS", "1.0.0", null).Grant!.AccessToken;
+
+            // A restart: the revocations kept in memory are gone, the store is what says who is signed in.
+            var restarted = new AccessTokens(secret, clock);
+            Assert.NotNull(restarted.Validate(earlier, store));
+
+            // Signed in again: what was issued before that no longer counts.
+            clock.Advance(TimeSpan.FromSeconds(1));
+            var again = sessions.SignIn(key, dev.Name, dev.Kind, "macOS", "1.0.0", null).Grant!.AccessToken;
+            Assert.Null(restarted.Validate(earlier, store));
+            Assert.NotNull(restarted.Validate(again, store));
+
+            // Removed: nothing issued to it counts, though this instance never heard of the removal.
+            Assert.True(store.DeleteDevice(dev.Id));
+            Assert.Null(restarted.Validate(again, store));
+        }
+        finally
+        {
+            Directory.Delete(temp, recursive: true);
+        }
     }
 
     [Fact]

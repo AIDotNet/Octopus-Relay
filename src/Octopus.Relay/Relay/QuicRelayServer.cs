@@ -255,7 +255,7 @@ public sealed class QuicRelayServer(
                 return;
             }
 
-            if (!accessTokens.TryValidate(request.Token.Trim(), out var grant) || grant.AccountId != store.GetOwner().Id)
+            if (accessTokens.Validate(request.Token.Trim(), store) is not { } grant || grant.AccountId != store.GetOwner().Id)
             {
                 await SendJoinResultAsync(stream, ok: false, "unauthorized", joinLimit.Token).ConfigureAwait(false);
                 return;

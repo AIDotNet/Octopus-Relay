@@ -6,12 +6,21 @@ using System.Text.Json;
 
 namespace Octopus.Relay.Auth;
 
-public readonly record struct AccessGrant(string AccountId, string DeviceId);
+/// <param name="Issued">When the token was issued, in Unix milliseconds.</param>
+public readonly record struct AccessGrant(string AccountId, string DeviceId, long Issued = 0);
 
-/// <summary>Stateless HMAC-signed 15-minute access tokens (<c>oa1.&lt;payload&gt;.&lt;HMAC&gt;</c>).</summary>
+/// <summary>
+/// HMAC-signed access tokens (<c>oa1.&lt;payload&gt;.&lt;HMAC&gt;</c>), valid for three days. <see cref="Validate"/>
+/// also asks the store whether the device is still signed in: the revocation table is in memory only, and a token
+/// lives longer than a restart is sure to take.
+/// </summary>
 public sealed class AccessTokens(byte[] serverSecret, TimeProvider time)
 {
-    public static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(15);
+    /// <summary>
+    /// Clients up to v1.0.1142 clamp <c>expiresIn</c> to a day and simply refresh sooner; tokens issued under the
+    /// earlier 15 minutes run out as they always did.
+    /// </summary>
+    public static readonly TimeSpan Lifetime = TimeSpan.FromDays(3);
 
     private const string Prefix = "oa1.";
     private const int MaxLength = 1024;
@@ -83,13 +92,28 @@ public sealed class AccessTokens(byte[] serverSecret, TimeProvider time)
                 return false;
             }
 
-            grant = new AccessGrant(accountId, deviceId);
+            grant = new AccessGrant(accountId, deviceId, issued);
             return true;
         }
         catch (Exception e) when (e is JsonException or FormatException or KeyNotFoundException or InvalidOperationException)
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// <see cref="TryValidate"/>, and the device the token was issued to is still signed in as it was then: removed,
+    /// signed out everywhere, given away by a replayed refresh token, or signed in anew since, it does not count.
+    /// </summary>
+    public AccessGrant? Validate(string? token, Storage.JsonStateStore store)
+    {
+        if (!TryValidate(token, out var grant))
+        {
+            return null;
+        }
+
+        var device = store.GetDevice(grant.DeviceId);
+        return device is not null && grant.Issued >= device.CreatedAt.ToUnixTimeMilliseconds() ? grant : null;
     }
 
     public void Revoke(string deviceId)

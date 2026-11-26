@@ -479,7 +479,7 @@ internal sealed class ClientApi(
     {
         var header = context.Request.Headers.Authorization.ToString();
         if (header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
-            && accessTokens.TryValidate(header["Bearer ".Length..].Trim(), out var grant)
+            && accessTokens.Validate(header["Bearer ".Length..].Trim(), store) is { } grant
             && grant.AccountId == store.GetOwner().Id)
         {
             return grant;
