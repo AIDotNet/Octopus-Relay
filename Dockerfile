@@ -10,6 +10,15 @@ COPY src/ src/
 RUN dotnet publish src/Octopus.Relay \
     -c Release \
     -p:PublishAot=true \
+    -p:OptimizationPreference=Size \
+    -p:IlcFoldIdenticalMethodBodies=true \
+    -p:InvariantGlobalization=true \
+    -p:UseSystemResourceKeys=true \
+    -p:EventSourceSupport=false \
+    -p:DebuggerSupport=false \
+    -p:MetricsSupport=false \
+    -p:MetadataUpdaterSupport=false \
+    -p:StackTraceSupport=false \
     -p:StripSymbols=true \
     -p:DebugType=None \
     -p:Version=${VERSION} \
