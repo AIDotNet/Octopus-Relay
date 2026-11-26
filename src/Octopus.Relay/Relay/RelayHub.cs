@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -303,10 +304,14 @@ public sealed class RelayHub(RelayOptions options, IRelayUsage usage)
         _ = CloseTunnelAsync(seat.Tunnel, WebSocketCloseStatus.EndpointUnavailable, "peer lost");
     }
 
-    public async Task RunTunnelAsync(TunnelSeat seat, WebSocket socket, CancellationToken cancellationToken)
+    public Task RunTunnelAsync(TunnelSeat seat, WebSocket socket, CancellationToken cancellationToken)
+    {
+        return RunTunnelAsync(seat, new RelaySocket(socket), cancellationToken);
+    }
+
+    internal async Task RunTunnelAsync(TunnelSeat seat, ITunnelEnd end, CancellationToken cancellationToken)
     {
         var tunnel = seat.Tunnel;
-        var end = new RelaySocket(socket);
         bool closed;
         bool paired;
         lock (_gate)
@@ -446,8 +451,7 @@ public sealed class RelayHub(RelayOptions options, IRelayUsage usage)
         var host = tunnel.Host!;
         var device = tunnel.Device!;
         Volatile.Write(ref tunnel.LastActivity, Environment.TickCount64);
-        var toDevice = PumpAsync(tunnel, host, device);
-        var toHost = PumpAsync(tunnel, device, host);
+        var (toDevice, toHost) = StartPumps(tunnel, host, device);
         if (options.IdleTimeout > TimeSpan.Zero)
         {
             _ = WatchIdleAsync(tunnel, options.IdleTimeout);
@@ -460,6 +464,41 @@ public sealed class RelayHub(RelayOptions options, IRelayUsage usage)
         await ReportUsageAsync(tunnel).ConfigureAwait(false);
         tunnel.Lifetime.Cancel();
         tunnel.Done.TrySetResult();
+    }
+
+    private (Task<bool> ToDevice, Task<bool> ToHost) StartPumps(Tunnel tunnel, ITunnelEnd host, ITunnelEnd device)
+    {
+        if (host is RelaySocket wsHost && device is RelaySocket wsDevice)
+        {
+            return (PumpAsync(tunnel, wsHost, wsDevice), PumpAsync(tunnel, wsDevice, wsHost));
+        }
+
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())
+        {
+            return StartQuicPumps(tunnel, host, device);
+        }
+
+        return (Task.FromResult(false), Task.FromResult(false));
+    }
+
+    [SupportedOSPlatform("linux")]
+    [SupportedOSPlatform("windows")]
+    [SupportedOSPlatform("macos")]
+    private (Task<bool> ToDevice, Task<bool> ToHost) StartQuicPumps(Tunnel tunnel, ITunnelEnd host, ITunnelEnd device)
+    {
+        return (host, device) switch
+        {
+            (QuicTunnelEnd qHost, QuicTunnelEnd qDevice) => (
+                PumpQuicToQuicAsync(tunnel, qHost, qDevice),
+                PumpQuicToQuicAsync(tunnel, qDevice, qHost)),
+            (RelaySocket wsHost, QuicTunnelEnd qDevice) => (
+                PumpWsToQuicAsync(tunnel, wsHost, qDevice),
+                PumpQuicToWsAsync(tunnel, qDevice, wsHost)),
+            (QuicTunnelEnd qHost, RelaySocket wsDevice) => (
+                PumpQuicToWsAsync(tunnel, qHost, wsDevice),
+                PumpWsToQuicAsync(tunnel, wsDevice, qHost)),
+            _ => (Task.FromResult(false), Task.FromResult(false)),
+        };
     }
 
     private async Task<bool> PumpAsync(Tunnel tunnel, RelaySocket from, RelaySocket to)
@@ -483,6 +522,130 @@ public sealed class RelayHub(RelayOptions options, IRelayUsage usage)
                 }
 
                 if (Interlocked.Add(ref tunnel.PendingBytes, received.Count) >= UsageFlushBytes && !await ReportUsageAsync(tunnel).ConfigureAwait(false))
+                {
+                    await CloseTunnelAsync(tunnel, WebSocketCloseStatus.PolicyViolation, "quota").ConfigureAwait(false);
+                }
+            }
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    [SupportedOSPlatform("linux")]
+    [SupportedOSPlatform("windows")]
+    [SupportedOSPlatform("macos")]
+    private async Task<bool> PumpQuicToQuicAsync(Tunnel tunnel, QuicTunnelEnd from, QuicTunnelEnd to)
+    {
+        var buffer = new byte[ForwardBufferBytes];
+        var token = tunnel.Lifetime.Token;
+        try
+        {
+            while (true)
+            {
+                var read = await from.Stream.ReadAsync(buffer.AsMemory(), token).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    return true;
+                }
+
+                Volatile.Write(ref tunnel.LastActivity, Environment.TickCount64);
+                if (!await to.WriteRawAsync(buffer.AsMemory(0, read), token).ConfigureAwait(false))
+                {
+                    return true;
+                }
+
+                if (Interlocked.Add(ref tunnel.PendingBytes, read) >= UsageFlushBytes && !await ReportUsageAsync(tunnel).ConfigureAwait(false))
+                {
+                    await CloseTunnelAsync(tunnel, WebSocketCloseStatus.PolicyViolation, "quota").ConfigureAwait(false);
+                }
+            }
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    [SupportedOSPlatform("linux")]
+    [SupportedOSPlatform("windows")]
+    [SupportedOSPlatform("macos")]
+    private async Task<bool> PumpWsToQuicAsync(Tunnel tunnel, RelaySocket from, QuicTunnelEnd to)
+    {
+        var buffer = new byte[ForwardBufferBytes];
+        using var message = new MemoryStream();
+        var token = tunnel.Lifetime.Token;
+        try
+        {
+            while (true)
+            {
+                var received = await from.Socket.ReceiveAsync(buffer.AsMemory(), token).ConfigureAwait(false);
+                if (received.MessageType == WebSocketMessageType.Close)
+                {
+                    return true;
+                }
+
+                Volatile.Write(ref tunnel.LastActivity, Environment.TickCount64);
+                if (message.Length + received.Count > QuicTunnelEnd.MaxMessageBytes)
+                {
+                    return false;
+                }
+
+                if (received.Count > 0)
+                {
+                    message.Write(buffer, 0, received.Count);
+                }
+
+                if (!received.EndOfMessage)
+                {
+                    continue;
+                }
+
+                var payload = message.GetBuffer().AsMemory(0, (int)message.Length);
+                if (!await to.WriteFramedMessageAsync(payload, token).ConfigureAwait(false))
+                {
+                    return true;
+                }
+
+                var bytes = payload.Length;
+                message.SetLength(0);
+
+                if (Interlocked.Add(ref tunnel.PendingBytes, bytes) >= UsageFlushBytes && !await ReportUsageAsync(tunnel).ConfigureAwait(false))
+                {
+                    await CloseTunnelAsync(tunnel, WebSocketCloseStatus.PolicyViolation, "quota").ConfigureAwait(false);
+                }
+            }
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    [SupportedOSPlatform("linux")]
+    [SupportedOSPlatform("windows")]
+    [SupportedOSPlatform("macos")]
+    private async Task<bool> PumpQuicToWsAsync(Tunnel tunnel, QuicTunnelEnd from, RelaySocket to)
+    {
+        var token = tunnel.Lifetime.Token;
+        try
+        {
+            while (true)
+            {
+                var payload = await QuicTunnelEnd.ReadFramedMessageAsync(from.Stream, QuicTunnelEnd.MaxMessageBytes, token).ConfigureAwait(false);
+                if (payload is null)
+                {
+                    return true;
+                }
+
+                Volatile.Write(ref tunnel.LastActivity, Environment.TickCount64);
+                if (!await to.SendAsync(payload, WebSocketMessageType.Binary, endOfMessage: true, token).ConfigureAwait(false))
+                {
+                    return true;
+                }
+
+                if (Interlocked.Add(ref tunnel.PendingBytes, payload.Length) >= UsageFlushBytes && !await ReportUsageAsync(tunnel).ConfigureAwait(false))
                 {
                     await CloseTunnelAsync(tunnel, WebSocketCloseStatus.PolicyViolation, "quota").ConfigureAwait(false);
                 }
@@ -537,8 +700,8 @@ public sealed class RelayHub(RelayOptions options, IRelayUsage usage)
 
     private async Task CloseTunnelAsync(Tunnel tunnel, WebSocketCloseStatus status, string reason)
     {
-        RelaySocket? host;
-        RelaySocket? device;
+        ITunnelEnd? host;
+        ITunnelEnd? device;
         bool paired;
         lock (_gate)
         {

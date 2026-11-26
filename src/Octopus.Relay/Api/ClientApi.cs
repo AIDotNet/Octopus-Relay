@@ -25,8 +25,11 @@ internal sealed class ClientApi(
     DeviceLogins deviceLogins,
     AccessKeyLogins keyLogins,
     RelayHub relay,
+    StunServer stun,
+    QuicRelayServer quic,
     TimeProvider time)
 {
+    internal const int RelayProtocolVersion = 2;
     private const int ControlMessageBytes = 4096;
     private const string PasswordAccessFeature = "password-access";
     private static readonly TimeSpan CloseTimeout = TimeSpan.FromSeconds(2);
@@ -53,7 +56,36 @@ internal sealed class ClientApi(
 
     private Task Info(HttpContext context)
     {
-        var body = new RelayInfoBody(1, "self-hosted", settings.ServerName, AppVersion, ownerAuth.SupportedAuthMethods);
+        var origin = Wire.PublicOrigin(context, settings);
+        var quicEndpoint = quic.AdvertisedEndpoint(origin);
+        IReadOnlyList<string> transports = quicEndpoint is not null ? ["ws", "quic"] : ["ws"];
+
+        List<string>? stunServers = null;
+        if (stun.AdvertisedEndpoint(origin) is { } builtInStun)
+        {
+            stunServers = [builtInStun];
+        }
+
+        if (settings.ExternalStunServers.Count > 0)
+        {
+            stunServers ??= [];
+            foreach (var external in settings.ExternalStunServers)
+            {
+                if (!stunServers.Contains(external, StringComparer.OrdinalIgnoreCase))
+                {
+                    stunServers.Add(external);
+                }
+            }
+        }
+
+        var idleSeconds = settings.Relay.IdleTimeout > TimeSpan.Zero ? (int)Math.Ceiling(settings.Relay.IdleTimeout.TotalSeconds) : (int?)null;
+        var body = new RelayInfoBody(RelayProtocolVersion, "self-hosted", settings.ServerName, AppVersion, ownerAuth.SupportedAuthMethods)
+        {
+            Transports = transports,
+            StunServers = stunServers,
+            QuicEndpoint = quicEndpoint,
+            IdleTimeoutSeconds = idleSeconds,
+        };
         return Wire.Json(context, StatusCodes.Status200OK, body, ApiJson.Default.RelayInfoBody);
     }
 
@@ -246,6 +278,7 @@ internal sealed class ClientApi(
             .. devices.Select(device =>
             {
                 var online = relay.IsOnline(device.Id);
+                var features = online ? relay.FeaturesOf(device.Id) : null;
                 return new ClientDeviceBody(
                     device.Id,
                     device.Name,
@@ -256,7 +289,10 @@ internal sealed class ClientApi(
                     device.Id == grant.DeviceId,
                     online && relay.HasFeature(device.Id, PasswordAccessFeature),
                     device.CreatedAt.UtcDateTime,
-                    device.LastSeenAt.UtcDateTime);
+                    device.LastSeenAt.UtcDateTime)
+                {
+                    Features = features,
+                };
             }),
         ]);
         await Wire.Json(context, StatusCodes.Status200OK, body, ApiJson.Default.ClientDevicesBody);

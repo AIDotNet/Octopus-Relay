@@ -1,3 +1,4 @@
+using System.Net;
 using Microsoft.Extensions.Configuration;
 using Octopus.Relay.Auth;
 using Octopus.Relay.Relay;
@@ -51,6 +52,27 @@ public sealed class ServerSettings
 
     public string? TlsKeyPath { get; set; }
 
+    /// <summary>Optional UDP port for built-in RFC 5389 STUN server (null disables STUN; 0 picks an ephemeral port).</summary>
+    public int? StunPort { get; set; }
+
+    /// <summary>Optional advertised hostname/IP for built-in STUN URI; defaults to <see cref="PublicUrl"/> / request host.</summary>
+    public string? StunHost { get; set; }
+
+    /// <summary>Optional bind IP for built-in STUN UDP socket (defaults to <see cref="IPAddress.Any"/>).</summary>
+    public IPAddress? StunBindAddress { get; set; }
+
+    /// <summary>Optional extra STUN server URIs (e.g. <c>stun:stun.example.com:3478</c>) advertised alongside built-in STUN.</summary>
+    public List<string> ExternalStunServers { get; } = [];
+
+    /// <summary>Optional UDP port for QUIC tunnel endpoint (<c>ALPN: octopus-relay-v2</c>; null disables QUIC; 0 picks an ephemeral port).</summary>
+    public int? QuicPort { get; set; }
+
+    /// <summary>Optional advertised hostname/IP for QUIC endpoint URI; defaults to <see cref="PublicUrl"/> / request host.</summary>
+    public string? QuicHost { get; set; }
+
+    /// <summary>Optional bind IP for QUIC UDP listener (defaults to <see cref="IPAddress.Any"/>).</summary>
+    public IPAddress? QuicBindAddress { get; set; }
+
     public bool ShowHelp { get; set; }
 
     public bool ShowVersion { get; set; }
@@ -87,6 +109,13 @@ public sealed class ServerSettings
         if (Env("RELAY_IDLE_SECONDS") is { } envIdle) settings.Relay.IdleTimeout = TimeSpan.FromSeconds(settings.ParseNumber(envIdle, "RELAY_IDLE_SECONDS", 0, 0));
         if (Env("RELAY_TLS_CERT") is { } envCert) settings.TlsCertPath = envCert;
         if (Env("RELAY_TLS_KEY") is { } envKeyPath) settings.TlsKeyPath = envKeyPath;
+        if (Env("RELAY_STUN_PORT") is { } envStunPort) settings.StunPort = (int)settings.ParseNumber(envStunPort, "RELAY_STUN_PORT", 3478, 0, 65535);
+        if (Env("RELAY_STUN_HOST") is { } envStunHost) settings.StunHost = envStunHost;
+        if (Env("RELAY_STUN_BIND") is { } envStunBind) settings.StunBindAddress = settings.ParseIp(envStunBind, "RELAY_STUN_BIND");
+        if (Env("RELAY_STUN_SERVERS") is { } envStunServers) settings.ParseStunServers(envStunServers);
+        if (Env("RELAY_QUIC_PORT") is { } envQuicPort) settings.QuicPort = (int)settings.ParseNumber(envQuicPort, "RELAY_QUIC_PORT", 8443, 0, 65535);
+        if (Env("RELAY_QUIC_HOST") is { } envQuicHost) settings.QuicHost = envQuicHost;
+        if (Env("RELAY_QUIC_BIND") is { } envQuicBind) settings.QuicBindAddress = settings.ParseIp(envQuicBind, "RELAY_QUIC_BIND");
 
         // 2. Command-line flags override environment variables
         for (var i = 0; i < args.Length; i++)
@@ -167,6 +196,27 @@ public sealed class ServerSettings
                     break;
                 case "--tls-key":
                     if (NextValue() is { } tlsKey) settings.TlsKeyPath = tlsKey;
+                    break;
+                case "--stun-port":
+                    if (NextValue() is { } sp) settings.StunPort = (int)settings.ParseNumber(sp, "--stun-port", 3478, 0, 65535);
+                    break;
+                case "--stun-host":
+                    if (NextValue() is { } sh) settings.StunHost = sh.Trim();
+                    break;
+                case "--stun-bind":
+                    if (NextValue() is { } sb) settings.StunBindAddress = settings.ParseIp(sb, "--stun-bind");
+                    break;
+                case "--stun-servers":
+                    if (NextValue() is { } ss) settings.ParseStunServers(ss);
+                    break;
+                case "--quic-port":
+                    if (NextValue() is { } qp) settings.QuicPort = (int)settings.ParseNumber(qp, "--quic-port", 8443, 0, 65535);
+                    break;
+                case "--quic-host":
+                    if (NextValue() is { } qh) settings.QuicHost = qh.Trim();
+                    break;
+                case "--quic-bind":
+                    if (NextValue() is { } qb) settings.QuicBindAddress = settings.ParseIp(qb, "--quic-bind");
                     break;
                 case "--memory":
                     settings.DataDir = null;
@@ -268,5 +318,33 @@ public sealed class ServerSettings
     private static bool ParseBool(string value)
     {
         return value is "1" || value.Equals("true", StringComparison.OrdinalIgnoreCase) || value.Equals("yes", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private IPAddress? ParseIp(string raw, string source)
+    {
+        if (IPAddress.TryParse(raw.Trim(), out var ip))
+        {
+            return ip;
+        }
+
+        Unreadable.Add($"{source} is not a valid IP address.");
+        return null;
+    }
+
+    private void ParseStunServers(string raw)
+    {
+        foreach (var entry in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (entry.Length == 0 || entry.Length > 255 || entry.Any(char.IsControl))
+            {
+                continue;
+            }
+
+            var normalized = entry.StartsWith("stun:", StringComparison.OrdinalIgnoreCase) ? entry : $"stun:{entry}";
+            if (!ExternalStunServers.Contains(normalized, StringComparer.OrdinalIgnoreCase))
+            {
+                ExternalStunServers.Add(normalized);
+            }
+        }
     }
 }

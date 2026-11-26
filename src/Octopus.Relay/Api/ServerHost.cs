@@ -55,6 +55,10 @@ public static class ServerHost
         services.AddSingleton<RelayUsage>();
         services.AddSingleton<IRelayUsage>(provider => provider.GetRequiredService<RelayUsage>());
         services.AddSingleton<RelayHub>();
+        services.AddSingleton<StunServer>();
+        services.AddHostedService(provider => provider.GetRequiredService<StunServer>());
+        services.AddSingleton<QuicRelayServer>();
+        services.AddHostedService(provider => provider.GetRequiredService<QuicRelayServer>());
         services.AddSingleton<IDeviceSignOut, RelaySignOut>();
         services.AddSingleton(provider => new DeviceSessions(
             provider.GetRequiredService<JsonStateStore>(),
@@ -270,10 +274,23 @@ public static class ServerProgram
         await app.StartAsync();
 
         var listening = ServerHost.ListeningUrl(app);
-        var publicDisplay = (settings.PublicUrl ?? listening).GetLeftPart(UriPartial.Authority);
+        var publicOrigin = settings.PublicUrl ?? listening;
+        var publicDisplay = publicOrigin.GetLeftPart(UriPartial.Authority);
         var ownerAuth = app.Services.GetRequiredService<OwnerAuthService>();
+        var stun = app.Services.GetRequiredService<StunServer>();
+        var quic = app.Services.GetRequiredService<QuicRelayServer>();
 
-        Console.WriteLine($"Octopus Relay v{ClientApi.AppVersion} listening on {settings.ListenUrl} (public: {publicDisplay})");
+        Console.WriteLine($"Octopus Relay v{ClientApi.AppVersion} (protocol v{ClientApi.RelayProtocolVersion}) listening on {settings.ListenUrl} (public: {publicDisplay})");
+        if (stun.AdvertisedEndpoint(publicOrigin) is { } stunUrl)
+        {
+            Console.WriteLine($"Built-in STUN (UDP): {stunUrl}");
+        }
+
+        if (quic.AdvertisedEndpoint(publicOrigin) is { } quicUrl)
+        {
+            Console.WriteLine($"QUIC tunnel (UDP): {quicUrl}");
+        }
+
         Console.WriteLine($"State directory: {(settings.DataDir is null ? "(in-memory)" : Path.GetFullPath(settings.DataDir))}");
 
         if (ownerAuth.NeedsSetup && ownerAuth.BootstrapSetupToken is { } token)
@@ -312,8 +329,13 @@ public static class ServerProgram
               --name <name>          Relay display name (default: Octopus Relay) [RELAY_NAME]
               --owner <name>         Owner display name (default: Owner) [RELAY_OWNER_NAME]
               --trust-proxy          Trust X-Forwarded-Proto/Host/For and CF-Connecting-IP [RELAY_TRUST_PROXY]
-              --tls-cert <file>      PEM certificate path for direct HTTPS [RELAY_TLS_CERT]
-              --tls-key <file>       PEM private key path for direct HTTPS [RELAY_TLS_KEY]
+              --tls-cert <file>      PEM certificate path for direct HTTPS / QUIC [RELAY_TLS_CERT]
+              --tls-key <file>       PEM private key path for direct HTTPS / QUIC [RELAY_TLS_KEY]
+              --stun-port <port>     Enable built-in UDP STUN server for WebRTC P2P (e.g. 3478) [RELAY_STUN_PORT]
+              --stun-host <host>     Public host/IP advertised for STUN URI [RELAY_STUN_HOST]
+              --stun-servers <list>  Extra comma-separated stun:host:port URIs to advertise [RELAY_STUN_SERVERS]
+              --quic-port <port>     Enable QUIC UDP tunnel endpoint (e.g. 8443) [RELAY_QUIC_PORT]
+              --quic-host <host>     Public host/IP advertised for QUIC URI [RELAY_QUIC_HOST]
               --memory               Run in memory without writing state to disk
               -v, --version          Print version
               -h, --help             Show this help

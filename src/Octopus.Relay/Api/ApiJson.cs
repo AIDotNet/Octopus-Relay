@@ -16,7 +16,20 @@ internal sealed record ErrorBody(string Error)
 
 // ---- /v1/* client & relay protocol ----
 
-internal sealed record RelayInfoBody(int Protocol, string Mode, string Name, string Version, IReadOnlyList<string> Auth);
+internal sealed record RelayInfoBody(int Protocol, string Mode, string Name, string Version, IReadOnlyList<string> Auth)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? Transports { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? StunServers { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? QuicEndpoint { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? IdleTimeoutSeconds { get; init; }
+}
 
 internal sealed record DeviceStartRequest(string? DeviceName, string? Kind, string? PublicKey, string? Platform, string? AppVersion);
 
@@ -52,7 +65,11 @@ internal sealed record ClientDeviceBody(
     bool Current,
     bool PasswordAccess,
     DateTime CreatedAt,
-    DateTime LastSeenAt);
+    DateTime LastSeenAt)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? Features { get; init; }
+}
 
 internal sealed record ClientDevicesBody(IReadOnlyList<ClientDeviceBody> Devices);
 
@@ -65,6 +82,12 @@ internal sealed record ChallengeMessage(string Type, string Nonce);
 internal sealed record RegisterMessage(string? Type, string? PublicKey, string? Name, string? Signature, List<string>? Features);
 
 internal sealed record HostControlMessage(string? Type, List<string>? Features);
+
+internal sealed record QuicTunnelJoinRequest(string? Tunnel, string? Role, string? Token);
+
+internal sealed record QuicTunnelJoinResponse(
+    bool Ok,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Error = null);
 
 // ---- /api/* built-in management UI ----
 
@@ -95,7 +118,14 @@ internal sealed record CodeRequest(string? Code);
 
 internal sealed record WebAccountBody(string Id, string Name, DateTime CreatedAt);
 
-internal sealed record WebStatsBody(int OnlineHosts, int ActiveTunnels, long MonthlyBytes, long MonthlyLimitBytes, DateTime StartedAt);
+internal sealed record WebStatsBody(int OnlineHosts, int ActiveTunnels, long MonthlyBytes, long MonthlyLimitBytes, DateTime StartedAt)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? StunEndpoint { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? QuicEndpoint { get; init; }
+}
 
 internal sealed record WebDashboardBody(
     string ServerName,
@@ -122,7 +152,11 @@ internal sealed record WebDeviceBody(
     bool PasswordAccess,
     DateTime CreatedAt,
     DateTime LastSeenAt,
-    string? LastIp);
+    string? LastIp)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? Features { get; init; }
+}
 
 internal sealed record DeviceLoginBody(
     string UserCode,
@@ -154,6 +188,8 @@ internal sealed record AccessKeyRotateBody(string AccessKey, string Hint, string
 [JsonSerializable(typeof(ChallengeMessage))]
 [JsonSerializable(typeof(RegisterMessage))]
 [JsonSerializable(typeof(HostControlMessage))]
+[JsonSerializable(typeof(QuicTunnelJoinRequest))]
+[JsonSerializable(typeof(QuicTunnelJoinResponse))]
 [JsonSerializable(typeof(WebStatusBody))]
 [JsonSerializable(typeof(SetupRequest))]
 [JsonSerializable(typeof(SetupResponseBody))]

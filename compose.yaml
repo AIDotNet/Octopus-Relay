@@ -16,6 +16,9 @@ services:
     ports:
       # Bind loopback only; terminate TLS in your reverse proxy or tunnel.
       - "127.0.0.1:${RELAY_PORT:-8080}:8080"
+      # Optional v2 UDP endpoints (uncomment and set RELAY_STUN_PORT=3478 / RELAY_QUIC_PORT=8443 in .env):
+      # - "3478:3478/udp"
+      # - "8443:8443/udp"
 
 volumes:
   octopus-relay-data:

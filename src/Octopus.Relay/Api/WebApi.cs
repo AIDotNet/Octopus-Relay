@@ -17,6 +17,8 @@ internal sealed class WebApi(
     DeviceLogins deviceLogins,
     RelayHub relay,
     RelayUsage usage,
+    StunServer stun,
+    QuicRelayServer quic,
     TimeProvider time)
 {
     private const string PasswordAccessFeature = "password-access";
@@ -135,13 +137,18 @@ internal sealed class WebApi(
         }
 
         var devices = store.GetDevices();
-        var publicUrl = Wire.PublicOrigin(context, settings).GetLeftPart(UriPartial.Authority);
+        var origin = Wire.PublicOrigin(context, settings);
+        var publicUrl = origin.GetLeftPart(UriPartial.Authority);
         var stats = new WebStatsBody(
             relay.HostCount,
             relay.TunnelCount,
             store.GetUsage(usage.CurrentMonth()),
             settings.Relay.MonthlyBytesLimit,
-            _startedAt.UtcDateTime);
+            _startedAt.UtcDateTime)
+        {
+            StunEndpoint = stun.AdvertisedEndpoint(origin),
+            QuicEndpoint = quic.AdvertisedEndpoint(origin),
+        };
         var body = new WebDashboardBody(
             settings.ServerName,
             ClientApi.AppVersion,
@@ -365,7 +372,10 @@ internal sealed class WebApi(
                     online && relay.HasFeature(d.Id, PasswordAccessFeature),
                     d.CreatedAt.UtcDateTime,
                     d.LastSeenAt.UtcDateTime,
-                    d.LastIp);
+                    d.LastIp)
+                {
+                    Features = online ? relay.FeaturesOf(d.Id) : null,
+                };
             }),
         ];
     }

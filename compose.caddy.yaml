@@ -15,6 +15,10 @@ services:
       RELAY_TRUST_PROXY: "true"
     volumes:
       - octopus-relay-data:/data
+    # Optional v2 UDP endpoints (uncomment and set RELAY_STUN_PORT=3478 / RELAY_QUIC_PORT=8443 in .env):
+    # ports:
+    #   - "3478:3478/udp"
+    #   - "8443:8443/udp"
 
   caddy:
     image: caddy:2-alpine

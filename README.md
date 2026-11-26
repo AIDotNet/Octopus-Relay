@@ -150,7 +150,12 @@ server {
 | `RELAY_MAX_TUNNELS_PER_HOST` | — | `32` | 单台主机最大并发隧道数 |
 | `RELAY_MONTHLY_BYTES` | — | `0`（不限） | 每月流量上限（字节） |
 | `RELAY_IDLE_SECONDS` | — | `0`（不关闭） | 空闲隧道自动关闭秒数 |
-| `RELAY_TLS_CERT` / `RELAY_TLS_KEY` | `--tls-cert` / `--tls-key` | 空 | 直出 HTTPS 时的 PEM 证书与私钥文件路径 |
+| `RELAY_TLS_CERT` / `RELAY_TLS_KEY` | `--tls-cert` / `--tls-key` | 空 | 直出 HTTPS / QUIC 时的 PEM 证书与私钥文件路径 |
+| `RELAY_STUN_PORT` | `--stun-port` | 空（关闭） | 启用内置 RFC 5389 UDP STUN 服务端口（推荐 `3478`），用于公网 WebRTC P2P 打洞 |
+| `RELAY_STUN_HOST` | `--stun-host` | 自动取公共域名 | `/v1/info` 对外通告的 STUN 主机名或 IP |
+| `RELAY_STUN_SERVERS` | `--stun-servers` | 空 | 额外逗号分隔的外部 STUN 地址（如 `stun:stun.example.com:3478`） |
+| `RELAY_QUIC_PORT` | `--quic-port` | 空（关闭） | 启用 QUIC UDP 隧道端口（推荐 `8443`，需系统具备 `libmsquic`），支持 QUIC↔WS 混合桥接 |
+| `RELAY_QUIC_HOST` | `--quic-host` | 自动取公共域名 | `/v1/info` 对外通告的 QUIC 主机名或 IP |
 
 ---
 

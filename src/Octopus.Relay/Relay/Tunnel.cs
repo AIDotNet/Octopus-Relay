@@ -1,6 +1,6 @@
 namespace Octopus.Relay.Relay;
 
-/// <summary>Two WebSockets joined for transparent encrypted binary forwarding.</summary>
+/// <summary>Two tunnel ends (WebSocket and/or QUIC) joined for transparent encrypted binary forwarding.</summary>
 internal sealed class Tunnel(string id, string accountId, string hostDeviceId, string deviceId)
 {
     public string Id => id;
@@ -13,8 +13,8 @@ internal sealed class Tunnel(string id, string accountId, string hostDeviceId, s
 
     public bool HostTaken;
     public bool DeviceTaken;
-    public RelaySocket? Host;
-    public RelaySocket? Device;
+    public ITunnelEnd? Host;
+    public ITunnelEnd? Device;
     public bool Paired;
     public bool Closed;
 
